@@ -1,17 +1,49 @@
 const express = require('express');
-const yts = require('yt-search');
-const axios = require('axios');
 const app = express();
 
 const PORT = process.env.PORT || 3000;
+const HOST = '0.0.0.0';
+
+console.log('🚀 Starting server...');
+console.log('📍 Node version:', process.version);
+console.log('📍 PORT:', PORT);
+console.log('📍 HOST:', HOST);
+
+// Basic health check FIRST (paling penting!)
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    message: 'Server is running!',
+    timestamp: new Date().toISOString(),
+    port: PORT
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy',
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Middleware
 app.use(express.json());
 app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${req.method} ${req.path}`);
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
+
+// Import dependencies SETELAH basic routes
+let yts, axios;
+try {
+  yts = require('yt-search');
+  axios = require('axios');
+  console.log('✅ Dependencies loaded successfully');
+} catch (error) {
+  console.error('❌ Failed to load dependencies:', error.message);
+}
 
 // Invidious instances
 const INVIDIOUS_INSTANCES = [
@@ -27,20 +59,13 @@ function getNextInstance() {
   return instance;
 }
 
-// Routes
-app.get('/', (req, res) => {
-  res.json({ 
-    status: 'ok',
-    endpoints: ['/search?q=query', '/audio?id=videoId', '/health']
-  });
-});
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
-
+// Search endpoint
 app.get('/search', async (req, res) => {
   try {
+    if (!yts) {
+      return res.status(503).json({ error: 'Search service not available' });
+    }
+
     const query = req.query.q;
     if (!query) {
       return res.status(400).json({ error: "Missing 'q' parameter" });
@@ -64,8 +89,13 @@ app.get('/search', async (req, res) => {
   }
 });
 
+// Audio endpoint
 app.get('/audio', async (req, res) => {
   try {
+    if (!axios) {
+      return res.status(503).json({ error: 'Audio service not available' });
+    }
+
     const id = req.query.id;
     if (!id) {
       return res.status(400).json({ error: "Missing 'id' parameter" });
@@ -117,16 +147,36 @@ app.get('/audio', async (req, res) => {
   }
 });
 
-// Global error handler
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
+});
+
+// Error handler
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server started on 0.0.0.0:${PORT}`);
+// Start server dengan error handling
+const server = app.listen(PORT, HOST, (err) => {
+  if (err) {
+    console.error('❌ Failed to start server:', err);
+    process.exit(1);
+  }
+  console.log(`✅ Server listening on ${HOST}:${PORT}`);
+  console.log(`📍 Health check: http://localhost:${PORT}/health`);
   console.log(`📍 Time: ${new Date().toISOString()}`);
+});
+
+// Handle server errors
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use`);
+  } else {
+    console.error('❌ Server error:', error);
+  }
+  process.exit(1);
 });
 
 // Graceful shutdown
@@ -136,4 +186,17 @@ process.on('SIGTERM', () => {
     console.log('Server closed');
     process.exit(0);
   });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, closing server...');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+// Catch unhandled rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });

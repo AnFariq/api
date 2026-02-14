@@ -18,5 +18,9 @@
     "express": "^5.2.1",
     "puppeteer": "^24.37.2",
     "yt-search": "^2.13.1"
+  },
+  "engines": {
+    "node": "18.x",
+    "npm": ">=8.0.0"
   }
 }
