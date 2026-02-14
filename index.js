@@ -4,7 +4,7 @@ const axios = require('axios');
 const play = require('play-dl');
 const app = express();
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 
 console.log('🚀 Starting Multi-Backend Music API...');
 console.log('📍 Node:', process.version);
@@ -217,7 +217,9 @@ app.use((req, res) => {
 
 // Start
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n✅ Server running on 0.0.0.0:${PORT}\n`);
+  console.log(`✅ SERVER AKTIF!`);
+  console.log(`Link: http://0.0.0.0:${PORT}`);
+  console.log(`Port dari Railway: ${process.env.PORT}`);
 });
 
 server.on('error', (e) => {
