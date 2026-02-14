@@ -1,7 +1,13 @@
 const express = require('express');
+const cors = require('cors'); // Tambahkan ini
 const yts = require('yt-search');
 const app = express();
-const PORT = 3000;
+
+// Gunakan port dari environment variable (penting untuk Railway) atau default 3000
+const PORT = process.env.PORT || 3000; 
+
+// Aktifkan CORS agar Flutter Web bisa memanggil API ini
+app.use(cors()); 
 
 app.get('/search', async (req, res) => {
     const query = req.query.q;
@@ -18,6 +24,7 @@ app.get('/search', async (req, res) => {
             author: v.author.name,
             thumbnail: v.thumbnail,
             url: v.url,
+            // Menggunakan API pihak ketiga untuk mendapatkan stream audio mp3
             download_url: `https://www.youtubeapi.tv/api/button/mp3/${v.videoId}`
         }));
 
@@ -35,4 +42,4 @@ app.get('/search', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => console.log(`Backend MP3Juice-Style jalan di http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Backend Musik jalan di port ${PORT}`));
