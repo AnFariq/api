@@ -155,126 +155,39 @@ app.get('/search', async (req, res) => {
   }
 });
 
-// === AUDIO - WITH PROXY SUPPORT ===
+// === AUDIO - OPTIMIZED FOR SPEED ===
 app.get('/audio', async (req, res) => {
   const id = req.query.id;
   if (!id) return res.status(400).json({ error: "Parameter 'id' required" });
 
   console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`🎵 AUDIO REQUEST: ${id}`);
+  console.log(`🎵 AUDIO: ${id}`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
-  // ===== STRATEGY 1: Piped with Proxy =====
-  console.log('🔷 [1/3] Trying Piped API (with proxy fallback)...');
-  for (let i = 0; i < PIPED.length; i++) {
-    const inst = getPiped();
-    try {
-      console.log(`\n   Instance: ${inst}`);
-      
-      const response = await fetchWithProxy(
-        `${inst}/streams/${id}`,
-        {
-          timeout: 8000,
-          headers: { 
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
-        }
-      );
-
-      const data = response.data;
-      const audios = (data.audioStreams || []).filter(f => f.url);
-
-      if (audios.length > 0) {
-        const best = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-        
-        console.log(`\n   ✅ SUCCESS via Piped!`);
-        console.log(`   Bitrate: ${best.bitrate}kbps`);
-        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
-        
-        return res.json({
-          success: true,
-          backend: 'piped',
-          instance: inst,
-          data: {
-            url: best.url,
-            type: best.mimeType || 'audio/mp4',
-            quality: best.quality || 'AUDIO',
-            bitrate: best.bitrate * 1000,
-            title: data.title,
-            author: data.uploader,
-            duration: data.duration
-          }
-        });
-      }
-      
-      console.log(`   ⚠ No audio streams found`);
-    } catch (e) {
-      console.log(`   ✗ Instance failed`);
-    }
-  }
-
-  // ===== STRATEGY 2: Invidious with Proxy =====
-  console.log('\n🔶 [2/3] Trying Invidious API (with proxy fallback)...');
-  for (let i = 0; i < INVIDIOUS.length; i++) {
-    const inst = getInv();
-    try {
-      console.log(`\n   Instance: ${inst}`);
-      
-      const response = await fetchWithProxy(
-        `${inst}/api/v1/videos/${id}`,
-        {
-          timeout: 8000,
-          headers: { 'User-Agent': 'Mozilla/5.0' }
-        }
-      );
-
-      const data = response.data;
-      const audios = (data.adaptiveFormats || [])
-        .filter(f => f.type && f.type.includes('audio') && f.url);
-
-      if (audios.length > 0) {
-        const best = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-        
-        console.log(`\n   ✅ SUCCESS via Invidious!`);
-        console.log(`   Bitrate: ${best.bitrate}bps`);
-        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
-        
-        return res.json({
-          success: true,
-          backend: 'invidious',
-          instance: inst,
-          data: {
-            url: best.url,
-            type: best.type,
-            bitrate: best.bitrate,
-            title: data.title,
-            author: data.author,
-            duration: data.lengthSeconds
-          }
-        });
-      }
-      
-      console.log(`   ⚠ No audio formats found`);
-    } catch (e) {
-      console.log(`   ✗ Instance failed`);
-    }
-  }
-
-  // ===== STRATEGY 3: play-dl (Direct - no proxy needed) =====
-  console.log('\n🔸 [3/3] Trying play-dl (direct extraction)...');
+  // ===== STRATEGY 1: play-dl (PRIORITY - Fastest & Most Reliable) =====
+  console.log('⭐ [1/3] play-dl (direct)...');
   try {
-    console.log(`   → Extracting via play-dl`);
+    const info = await Promise.race([
+      play.video_info(`https://www.youtube.com/watch?v=${id}`),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('play-dl timeout')), 15000) // 15s timeout
+      )
+    ]);
     
-    const info = await play.video_info(`https://www.youtube.com/watch?v=${id}`);
     const audioFormats = info.format.filter(f => !f.video_codec && f.url);
     
     if (audioFormats.length > 0) {
-      const best = audioFormats.sort((a, b) => 
-        (b.bitrate || 0) - (a.bitrate || 0)
-      )[0];
+      const best = audioFormats.sort((a, b) => {
+        const qualityOrder = { high: 3, medium: 2, low: 1 };
+        const aQuality = qualityOrder[a.quality] || 0;
+        const bQuality = qualityOrder[b.quality] || 0;
+        if (aQuality !== bQuality) return bQuality - aQuality;
+        return (b.bitrate || 0) - (a.bitrate || 0);
+      })[0];
       
-      console.log(`\n   ✅ SUCCESS via play-dl!`);
+      console.log(`✅ SUCCESS!`);
       console.log(`   Quality: ${best.quality}`);
+      console.log(`   Bitrate: ${best.bitrate || 'N/A'}`);
       console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
       
       return res.json({
@@ -286,15 +199,101 @@ app.get('/audio', async (req, res) => {
           quality: best.quality,
           bitrate: best.bitrate || 128000,
           title: info.video_details.title,
-          author: info.video_details.channel?.name,
-          duration: info.video_details.durationInSec
+          author: info.video_details.channel?.name || 'Unknown',
+          duration: info.video_details.durationInSec,
+          thumbnail: info.video_details.thumbnails?.[0]?.url
         }
       });
     }
-    
-    console.log(`   ⚠ No audio format available`);
   } catch (e) {
-    console.log(`   ✗ play-dl failed: ${e.message}`);
+    console.log(`✗ Failed: ${e.message}\n`);
+  }
+
+  // ===== STRATEGY 2: Piped (Only 2 fastest instances) =====
+  console.log('🔷 [2/3] Piped API...');
+  const fastPiped = ['https://pipedapi.kavin.rocks', 'https://pipedapi-libre.kavin.rocks'];
+  
+  for (const inst of fastPiped) {
+    try {
+      console.log(`\n   ${inst}`);
+      
+      const response = await Promise.race([
+        fetchWithProxy(`${inst}/streams/${id}`, { timeout: 8000 }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('timeout')), 8000)
+        )
+      ]);
+      
+      const data = response.data;
+      const audios = (data.audioStreams || []).filter(f => f.url);
+
+      if (audios.length > 0) {
+        const best = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+        
+        console.log(`✅ SUCCESS!`);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+        
+        return res.json({
+          success: true,
+          backend: 'piped',
+          data: {
+            url: best.url,
+            type: best.mimeType || 'audio/mp4',
+            bitrate: best.bitrate * 1000,
+            quality: 'high',
+            title: data.title,
+            author: data.uploader,
+            duration: data.duration
+          }
+        });
+      }
+    } catch (e) {
+      console.log(`   ✗ Failed`);
+    }
+  }
+
+  // ===== STRATEGY 3: Invidious (Only 1 fastest instance) =====
+  console.log('\n🔶 [3/3] Invidious API...');
+  const fastInv = ['https://invidious.protokolla.fi'];
+  
+  for (const inst of fastInv) {
+    try {
+      console.log(`\n   ${inst}`);
+      
+      const response = await Promise.race([
+        fetchWithProxy(`${inst}/api/v1/videos/${id}`, { timeout: 8000 }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('timeout')), 8000)
+        )
+      ]);
+      
+      const data = response.data;
+      const audios = (data.adaptiveFormats || [])
+        .filter(f => f.type && f.type.includes('audio') && f.url);
+
+      if (audios.length > 0) {
+        const best = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+        
+        console.log(`✅ SUCCESS!`);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+        
+        return res.json({
+          success: true,
+          backend: 'invidious',
+          data: {
+            url: best.url,
+            type: best.type,
+            bitrate: best.bitrate,
+            quality: 'high',
+            title: data.title,
+            author: data.author,
+            duration: data.lengthSeconds
+          }
+        });
+      }
+    } catch (e) {
+      console.log(`   ✗ Failed`);
+    }
   }
 
   // ===== ALL FAILED =====
@@ -303,11 +302,8 @@ app.get('/audio', async (req, res) => {
   
   res.status(503).json({ 
     success: false, 
-    error: 'All backends and proxies failed',
-    videoId: id,
-    triedBackends: ['piped', 'invidious', 'play-dl'],
-    triedProxies: PROXIES.length,
-    suggestion: 'Video may be restricted, age-gated, or try again later'
+    error: 'All backends failed',
+    videoId: id
   });
 });
 
