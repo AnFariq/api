@@ -1,16 +1,11 @@
 const express = require('express');
 const yts = require('yt-search');
-const cors = require('cors'); // Tambahkan ini (WAJIB buat Flutter Web)
 const app = express();
-
-// Railway bakal kasih port sendiri, jangan dipaksa ke 3000
-const PORT = process.env.PORT || 3000; 
-
-app.use(cors()); // Aktifkan ini
+const PORT = 3000;
 
 app.get('/search', async (req, res) => {
     const query = req.query.q;
-    if (!query) return res.status(400).json({ error: "Isi query-nya dulu!" });
+    if (!query) return res.status(400).json({ error: "Isi query-nya dulu cok!" });
 
     try {
         const r = await yts(query);
@@ -40,5 +35,4 @@ app.get('/search', async (req, res) => {
     }
 });
 
-// Gunakan 0.0.0.0 agar bisa diakses secara publik di Railway
-app.listen(PORT, '0.0.0.0', () => console.log(`Backend jalan di port ${PORT}`));
+app.listen(PORT, () => console.log(`Backend MP3Juice-Style jalan di http://localhost:${PORT}`));
