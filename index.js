@@ -50,8 +50,10 @@ app.get('/audio', async (req, res) => {
         ytdl(url, { format }).pipe(res);
 
     } catch (err) {
-        res.status(500).send("Gagal stream audio");
-    }
+    console.error("STREAM ERROR:", err);
+    res.status(500).send(err.message);
+}
+
 });
 
 app.listen(PORT, () =>
