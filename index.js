@@ -6,7 +6,7 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-console.log('🚀 Starting Music API v3.0...');
+console.log('🚀 Starting Music API v4.0 (With Proxy)...');
 console.log('📍 Node:', process.version);
 console.log('📍 Port:', PORT);
 
@@ -17,9 +17,66 @@ app.use((req, res, next) => {
   next();
 });
 
-// === UPDATED WORKING INSTANCES (Tested Feb 2026) ===
+// === CORS PROXIES (untuk bypass Railway/Vercel network block) ===
+const PROXIES = [
+  'https://corsproxy.io/?',
+  'https://api.allorigins.win/raw?url=',
+  'https://cors-anywhere.herokuapp.com/',
+  'https://thingproxy.freeboard.io/fetch/'
+];
 
-// Invidious - Updated list
+let proxyIdx = 0;
+const getProxy = () => {
+  const proxy = PROXIES[proxyIdx];
+  proxyIdx = (proxyIdx + 1) % PROXIES.length;
+  return proxy;
+};
+
+// Helper function: Fetch dengan proxy fallback
+async function fetchWithProxy(url, options = {}) {
+  const timeout = options.timeout || 8000;
+  
+  // Try direct first (untuk local/Fly.io)
+  try {
+    console.log(`   → Direct: ${url.substring(0, 50)}...`);
+    const response = await axios.get(url, { 
+      ...options, 
+      timeout 
+    });
+    console.log(`   ✓ Direct success`);
+    return response;
+  } catch (directError) {
+    console.log(`   ✗ Direct failed: ${directError.code || directError.message}`);
+    
+    // Fallback to proxies
+    for (let i = 0; i < PROXIES.length; i++) {
+      const proxy = getProxy();
+      try {
+        const proxyUrl = `${proxy}${encodeURIComponent(url)}`;
+        console.log(`   → Proxy ${i + 1}/${PROXIES.length}: ${proxy.substring(0, 30)}...`);
+        
+        const response = await axios.get(proxyUrl, { 
+          timeout,
+          headers: {
+            'User-Agent': 'Mozilla/5.0',
+            ...(options.headers || {})
+          }
+        });
+        
+        console.log(`   ✓ Proxy success`);
+        return response;
+      } catch (proxyError) {
+        console.log(`   ✗ Proxy failed: ${proxyError.code || proxyError.message}`);
+        continue;
+      }
+    }
+    
+    // All failed
+    throw new Error('All proxy attempts failed');
+  }
+}
+
+// === BACKEND INSTANCES ===
 const INVIDIOUS = [
   'https://inv.nadeko.net',
   'https://invidious.protokolla.fi',
@@ -28,7 +85,6 @@ const INVIDIOUS = [
   'https://yt.artemislena.eu'
 ];
 
-// Piped - Updated list
 const PIPED = [
   'https://pipedapi.kavin.rocks',
   'https://pipedapi-libre.kavin.rocks',
@@ -36,7 +92,6 @@ const PIPED = [
   'https://api.piped.privacydev.net'
 ];
 
-// === Helper Functions ===
 let invIdx = 0;
 const getInv = () => {
   const inst = INVIDIOUS[invIdx];
@@ -51,13 +106,15 @@ const getPiped = () => {
   return inst;
 };
 
-// === Routes ===
+// === ROUTES ===
 app.get('/', (req, res) => {
   res.json({ 
     status: 'ok',
-    version: '3.0',
-    message: 'Multi-Backend Music API',
+    version: '4.0-proxy',
+    message: 'Multi-Backend Music API with Proxy Support',
+    features: ['CORS Proxy', 'Multiple Backends', 'Auto Fallback'],
     backends: ['Invidious', 'Piped', 'play-dl'],
+    proxies: PROXIES.length,
     endpoints: {
       search: '/search?q=song',
       audio: '/audio?id=videoId'
@@ -73,7 +130,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// === Search ===
+// === SEARCH ===
 app.get('/search', async (req, res) => {
   try {
     const q = req.query.q;
@@ -98,7 +155,7 @@ app.get('/search', async (req, res) => {
   }
 });
 
-// === Audio - IMPROVED VERSION ===
+// === AUDIO - WITH PROXY SUPPORT ===
 app.get('/audio', async (req, res) => {
   const id = req.query.id;
   if (!id) return res.status(400).json({ error: "Parameter 'id' required" });
@@ -107,27 +164,31 @@ app.get('/audio', async (req, res) => {
   console.log(`🎵 AUDIO REQUEST: ${id}`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
-  // ===== STRATEGY 1: Piped (Fastest & Most Reliable) =====
-  console.log('🔷 [1/3] Trying Piped API...');
+  // ===== STRATEGY 1: Piped with Proxy =====
+  console.log('🔷 [1/3] Trying Piped API (with proxy fallback)...');
   for (let i = 0; i < PIPED.length; i++) {
     const inst = getPiped();
     try {
-      console.log(`   ↳ ${inst}`);
+      console.log(`\n   Instance: ${inst}`);
       
-      const { data } = await axios.get(`${inst}/streams/${id}`, {
-        timeout: 6000,
-        headers: { 
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      const response = await fetchWithProxy(
+        `${inst}/streams/${id}`,
+        {
+          timeout: 8000,
+          headers: { 
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
         }
-      });
+      );
 
+      const data = response.data;
       const audios = (data.audioStreams || []).filter(f => f.url);
 
       if (audios.length > 0) {
-        // Sort by bitrate and get best
         const best = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
         
-        console.log(`   ✅ SUCCESS! Bitrate: ${best.bitrate}kbps`);
+        console.log(`\n   ✅ SUCCESS via Piped!`);
+        console.log(`   Bitrate: ${best.bitrate}kbps`);
         console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
         
         return res.json({
@@ -138,7 +199,7 @@ app.get('/audio', async (req, res) => {
             url: best.url,
             type: best.mimeType || 'audio/mp4',
             quality: best.quality || 'AUDIO',
-            bitrate: best.bitrate * 1000, // Convert to bps
+            bitrate: best.bitrate * 1000,
             title: data.title,
             author: data.uploader,
             duration: data.duration
@@ -146,33 +207,36 @@ app.get('/audio', async (req, res) => {
         });
       }
       
-      console.log(`   ✗ No audio streams found`);
+      console.log(`   ⚠ No audio streams found`);
     } catch (e) {
-      const status = e.response?.status || e.code || e.message;
-      console.log(`   ✗ Failed: ${status}`);
+      console.log(`   ✗ Instance failed`);
     }
   }
 
-  // ===== STRATEGY 2: Invidious =====
-  console.log('\n🔶 [2/3] Trying Invidious API...');
+  // ===== STRATEGY 2: Invidious with Proxy =====
+  console.log('\n🔶 [2/3] Trying Invidious API (with proxy fallback)...');
   for (let i = 0; i < INVIDIOUS.length; i++) {
     const inst = getInv();
     try {
-      console.log(`   ↳ ${inst}`);
+      console.log(`\n   Instance: ${inst}`);
       
-      const { data } = await axios.get(`${inst}/api/v1/videos/${id}`, {
-        timeout: 6000,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      });
+      const response = await fetchWithProxy(
+        `${inst}/api/v1/videos/${id}`,
+        {
+          timeout: 8000,
+          headers: { 'User-Agent': 'Mozilla/5.0' }
+        }
+      );
 
+      const data = response.data;
       const audios = (data.adaptiveFormats || [])
         .filter(f => f.type && f.type.includes('audio') && f.url);
 
       if (audios.length > 0) {
-        // Sort by bitrate
         const best = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
         
-        console.log(`   ✅ SUCCESS! Bitrate: ${best.bitrate}bps`);
+        console.log(`\n   ✅ SUCCESS via Invidious!`);
+        console.log(`   Bitrate: ${best.bitrate}bps`);
         console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
         
         return res.json({
@@ -190,32 +254,27 @@ app.get('/audio', async (req, res) => {
         });
       }
       
-      console.log(`   ✗ No audio formats found`);
+      console.log(`   ⚠ No audio formats found`);
     } catch (e) {
-      const status = e.response?.status || e.code || e.message;
-      console.log(`   ✗ Failed: ${status}`);
+      console.log(`   ✗ Instance failed`);
     }
   }
 
-  // ===== STRATEGY 3: play-dl (Last Resort) =====
-  console.log('\n🔸 [3/3] Trying play-dl...');
+  // ===== STRATEGY 3: play-dl (Direct - no proxy needed) =====
+  console.log('\n🔸 [3/3] Trying play-dl (direct extraction)...');
   try {
-    console.log(`   ↳ Extracting via play-dl`);
+    console.log(`   → Extracting via play-dl`);
     
     const info = await play.video_info(`https://www.youtube.com/watch?v=${id}`);
-    
-    // Filter audio-only formats
-    const audioFormats = info.format.filter(f => 
-      !f.video_codec && f.url
-    );
+    const audioFormats = info.format.filter(f => !f.video_codec && f.url);
     
     if (audioFormats.length > 0) {
-      // Get highest quality
       const best = audioFormats.sort((a, b) => 
         (b.bitrate || 0) - (a.bitrate || 0)
       )[0];
       
-      console.log(`   ✅ SUCCESS! Quality: ${best.quality}`);
+      console.log(`\n   ✅ SUCCESS via play-dl!`);
+      console.log(`   Quality: ${best.quality}`);
       console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
       
       return res.json({
@@ -233,25 +292,26 @@ app.get('/audio', async (req, res) => {
       });
     }
     
-    console.log(`   ✗ No audio format available`);
+    console.log(`   ⚠ No audio format available`);
   } catch (e) {
-    console.log(`   ✗ Failed: ${e.message}`);
+    console.log(`   ✗ play-dl failed: ${e.message}`);
   }
 
-  // ===== ALL STRATEGIES FAILED =====
+  // ===== ALL FAILED =====
   console.log('\n❌ ALL BACKENDS FAILED');
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
   
   res.status(503).json({ 
     success: false, 
-    error: 'All backends unavailable. The video may be restricted, age-gated, or temporarily unavailable.',
+    error: 'All backends and proxies failed',
     videoId: id,
     triedBackends: ['piped', 'invidious', 'play-dl'],
-    suggestion: 'Try a different video or retry in a few minutes'
+    triedProxies: PROXIES.length,
+    suggestion: 'Video may be restricted, age-gated, or try again later'
   });
 });
 
-// 404 handler
+// 404
 app.use((req, res) => {
   res.status(404).json({ 
     error: 'Endpoint not found',
@@ -265,12 +325,13 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
+// Start
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n✅ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-  console.log(`   SERVER RUNNING`);
+  console.log(`   SERVER RUNNING (Proxy Mode)`);
   console.log(`   Port: ${PORT}`);
   console.log(`   Backends: ${INVIDIOUS.length + PIPED.length} instances`);
+  console.log(`   Proxies: ${PROXIES.length} fallbacks`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 });
 
