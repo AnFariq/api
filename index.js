@@ -1,6 +1,6 @@
 const express = require('express');
 const yts = require('yt-search');
-const ytdl = require('ytdl-core');
+const ytdl = require('@distube/ytdl-core');
 
 const app = express();
 const PORT = 3000;
@@ -39,7 +39,10 @@ app.get('/audio', async (req, res) => {
     const url = `https://www.youtube.com/watch?v=${id}`;
 
     try {
-        const info = await ytdl.getInfo(url);
+        const agent = ytdl.createAgent();
+
+        const info = await ytdl.getInfo(url, { agent });
+
         const format = ytdl.chooseFormat(info.formats, {
             quality: 'highestaudio'
         });
@@ -47,14 +50,14 @@ app.get('/audio', async (req, res) => {
         res.setHeader('Content-Type', format.mimeType);
         res.setHeader('Accept-Ranges', 'bytes');
 
-        ytdl(url, { format }).pipe(res);
+        ytdl(url, { format, agent }).pipe(res);
 
     } catch (err) {
-    console.error("STREAM ERROR:", err);
-    res.status(500).send(err.message);
-}
-
+        console.error("STREAM ERROR:", err);
+        res.status(500).send(err.message);
+    }
 });
+
 
 app.listen(PORT, () =>
     console.log(`Backend jalan di http://localhost:${PORT}`)
