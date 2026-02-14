@@ -6,7 +6,7 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-console.log('🚀 Starting Multi-Backend Music API...');
+console.log('🚀 Starting Music API v3.0...');
 console.log('📍 Node:', process.version);
 console.log('📍 Port:', PORT);
 
@@ -17,47 +17,47 @@ app.use((req, res, next) => {
   next();
 });
 
-// === BACKEND 1: Invidious (updated working instances) ===
+// === UPDATED WORKING INSTANCES (Tested Feb 2026) ===
+
+// Invidious - Updated list
 const INVIDIOUS = [
-  'https://iv.ggtyler.dev',
-  'https://invidious.fdn.fr',
-  'https://inv.tux.pizza',
-  'https://invidious.nerdvpn.de',
-  'https://iv.melmac.space'
+  'https://inv.nadeko.net',
+  'https://invidious.protokolla.fi',
+  'https://iv.nboeck.de',
+  'https://invidious.private.coffee',
+  'https://yt.artemislena.eu'
 ];
 
+// Piped - Updated list
+const PIPED = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi-libre.kavin.rocks',
+  'https://pipedapi.palveluntarjoaja.eu',
+  'https://api.piped.privacydev.net'
+];
+
+// === Helper Functions ===
 let invIdx = 0;
-const getInvidiousInstance = () => {
+const getInv = () => {
   const inst = INVIDIOUS[invIdx];
   invIdx = (invIdx + 1) % INVIDIOUS.length;
   return inst;
 };
 
-// === BACKEND 2: Piped ===
-const PIPED = [
-  'https://pipedapi.kavin.rocks',
-  'https://pipedapi.tokhmi.xyz',
-  'https://pipedapi.moomoo.me',
-  'https://api-piped.mha.fi'
-];
-
 let pipedIdx = 0;
-const getPipedInstance = () => {
+const getPiped = () => {
   const inst = PIPED[pipedIdx];
   pipedIdx = (pipedIdx + 1) % PIPED.length;
   return inst;
 };
 
-// === Health ===
+// === Routes ===
 app.get('/', (req, res) => {
   res.json({ 
     status: 'ok',
+    version: '3.0',
     message: 'Multi-Backend Music API',
-    backends: {
-      invidious: INVIDIOUS.length,
-      piped: PIPED.length,
-      playdl: 'enabled'
-    },
+    backends: ['Invidious', 'Piped', 'play-dl'],
     endpoints: {
       search: '/search?q=song',
       audio: '/audio?id=videoId'
@@ -68,7 +68,7 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy',
-    uptime: process.uptime(),
+    uptime: Math.floor(process.uptime()),
     timestamp: new Date().toISOString()
   });
 });
@@ -77,7 +77,7 @@ app.get('/health', (req, res) => {
 app.get('/search', async (req, res) => {
   try {
     const q = req.query.q;
-    if (!q) return res.status(400).json({ error: "Missing 'q'" });
+    if (!q) return res.status(400).json({ error: "Parameter 'q' required" });
 
     console.log(`Search: "${q}"`);
     const r = await yts(q);
@@ -98,128 +98,180 @@ app.get('/search', async (req, res) => {
   }
 });
 
-// === Audio - Multi-Backend Strategy ===
+// === Audio - IMPROVED VERSION ===
 app.get('/audio', async (req, res) => {
   const id = req.query.id;
-  if (!id) return res.status(400).json({ error: "Missing 'id'" });
+  if (!id) return res.status(400).json({ error: "Parameter 'id' required" });
 
-  console.log(`\n=== AUDIO REQUEST: ${id} ===`);
+  console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`🎵 AUDIO REQUEST: ${id}`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 
-  // STRATEGY 1: Try Invidious
-  console.log('\n[STRATEGY 1] Trying Invidious...');
-  for (let i = 0; i < INVIDIOUS.length; i++) {
-    const inst = getInvidiousInstance();
+  // ===== STRATEGY 1: Piped (Fastest & Most Reliable) =====
+  console.log('🔷 [1/3] Trying Piped API...');
+  for (let i = 0; i < PIPED.length; i++) {
+    const inst = getPiped();
     try {
-      console.log(`  → ${inst}`);
+      console.log(`   ↳ ${inst}`);
+      
+      const { data } = await axios.get(`${inst}/streams/${id}`, {
+        timeout: 6000,
+        headers: { 
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+
+      const audios = (data.audioStreams || []).filter(f => f.url);
+
+      if (audios.length > 0) {
+        // Sort by bitrate and get best
+        const best = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+        
+        console.log(`   ✅ SUCCESS! Bitrate: ${best.bitrate}kbps`);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+        
+        return res.json({
+          success: true,
+          backend: 'piped',
+          instance: inst,
+          data: {
+            url: best.url,
+            type: best.mimeType || 'audio/mp4',
+            quality: best.quality || 'AUDIO',
+            bitrate: best.bitrate * 1000, // Convert to bps
+            title: data.title,
+            author: data.uploader,
+            duration: data.duration
+          }
+        });
+      }
+      
+      console.log(`   ✗ No audio streams found`);
+    } catch (e) {
+      const status = e.response?.status || e.code || e.message;
+      console.log(`   ✗ Failed: ${status}`);
+    }
+  }
+
+  // ===== STRATEGY 2: Invidious =====
+  console.log('\n🔶 [2/3] Trying Invidious API...');
+  for (let i = 0; i < INVIDIOUS.length; i++) {
+    const inst = getInv();
+    try {
+      console.log(`   ↳ ${inst}`);
+      
       const { data } = await axios.get(`${inst}/api/v1/videos/${id}`, {
-        timeout: 8000,
+        timeout: 6000,
         headers: { 'User-Agent': 'Mozilla/5.0' }
       });
 
       const audios = (data.adaptiveFormats || [])
-        .filter(f => f.type && f.type.includes('audio'));
+        .filter(f => f.type && f.type.includes('audio') && f.url);
 
       if (audios.length > 0) {
-        const best = audios.reduce((a, b) => 
-          (b.bitrate || 0) > (a.bitrate || 0) ? b : a
-        );
+        // Sort by bitrate
+        const best = audios.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
         
-        console.log(`  ✅ SUCCESS via Invidious: ${best.bitrate}bps`);
+        console.log(`   ✅ SUCCESS! Bitrate: ${best.bitrate}bps`);
+        console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+        
         return res.json({
           success: true,
           backend: 'invidious',
+          instance: inst,
           data: {
             url: best.url,
             type: best.type,
             bitrate: best.bitrate,
-            title: data.title
+            title: data.title,
+            author: data.author,
+            duration: data.lengthSeconds
           }
         });
       }
+      
+      console.log(`   ✗ No audio formats found`);
     } catch (e) {
-      console.log(`  ✗ ${e.response?.status || e.code || e.message}`);
+      const status = e.response?.status || e.code || e.message;
+      console.log(`   ✗ Failed: ${status}`);
     }
   }
 
-  // STRATEGY 2: Try Piped
-  console.log('\n[STRATEGY 2] Trying Piped...');
-  for (let i = 0; i < PIPED.length; i++) {
-    const inst = getPipedInstance();
-    try {
-      console.log(`  → ${inst}`);
-      const { data } = await axios.get(`${inst}/streams/${id}`, {
-        timeout: 8000,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      });
-
-      const audios = (data.audioStreams || [])
-        .filter(f => f.url);
-
-      if (audios.length > 0) {
-        const best = audios.reduce((a, b) => 
-          (b.bitrate || 0) > (a.bitrate || 0) ? b : a
-        );
-        
-        console.log(`  ✅ SUCCESS via Piped: ${best.bitrate}kbps`);
-        return res.json({
-          success: true,
-          backend: 'piped',
-          data: {
-            url: best.url,
-            type: best.mimeType || 'audio/mp4',
-            bitrate: best.bitrate * 1000,
-            title: data.title
-          }
-        });
-      }
-    } catch (e) {
-      console.log(`  ✗ ${e.response?.status || e.code || e.message}`);
-    }
-  }
-
-  // STRATEGY 3: Try play-dl (last resort)
-  console.log('\n[STRATEGY 3] Trying play-dl...');
+  // ===== STRATEGY 3: play-dl (Last Resort) =====
+  console.log('\n🔸 [3/3] Trying play-dl...');
   try {
-    const info = await play.video_info(`https://www.youtube.com/watch?v=${id}`);
-    const format = info.format.filter(f => f.quality === 'high' && !f.video_codec);
+    console.log(`   ↳ Extracting via play-dl`);
     
-    if (format.length > 0) {
-      const audio = format[0];
-      console.log(`  ✅ SUCCESS via play-dl`);
+    const info = await play.video_info(`https://www.youtube.com/watch?v=${id}`);
+    
+    // Filter audio-only formats
+    const audioFormats = info.format.filter(f => 
+      !f.video_codec && f.url
+    );
+    
+    if (audioFormats.length > 0) {
+      // Get highest quality
+      const best = audioFormats.sort((a, b) => 
+        (b.bitrate || 0) - (a.bitrate || 0)
+      )[0];
+      
+      console.log(`   ✅ SUCCESS! Quality: ${best.quality}`);
+      console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+      
       return res.json({
         success: true,
         backend: 'play-dl',
         data: {
-          url: audio.url,
+          url: best.url,
           type: 'audio/mp4',
-          bitrate: audio.bitrate || 128000,
-          title: info.video_details.title
+          quality: best.quality,
+          bitrate: best.bitrate || 128000,
+          title: info.video_details.title,
+          author: info.video_details.channel?.name,
+          duration: info.video_details.durationInSec
         }
       });
     }
+    
+    console.log(`   ✗ No audio format available`);
   } catch (e) {
-    console.log(`  ✗ ${e.message}`);
+    console.log(`   ✗ Failed: ${e.message}`);
   }
 
-  // ALL FAILED
+  // ===== ALL STRATEGIES FAILED =====
   console.log('\n❌ ALL BACKENDS FAILED');
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+  
   res.status(503).json({ 
     success: false, 
-    error: 'All backends failed. Try again later.',
-    videoId: id
+    error: 'All backends unavailable. The video may be restricted, age-gated, or temporarily unavailable.',
+    videoId: id,
+    triedBackends: ['piped', 'invidious', 'play-dl'],
+    suggestion: 'Try a different video or retry in a few minutes'
   });
 });
 
-// 404
+// 404 handler
 app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
+  res.status(404).json({ 
+    error: 'Endpoint not found',
+    availableEndpoints: ['/', '/health', '/search', '/audio']
+  });
 });
 
-// Start
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// Start server
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ SERVER AKTIF!`);
-  console.log(`Link: http://0.0.0.0:${PORT}`);
-  console.log(`Port dari Railway: ${process.env.PORT}`);
+  console.log(`\n✅ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  console.log(`   SERVER RUNNING`);
+  console.log(`   Port: ${PORT}`);
+  console.log(`   Backends: ${INVIDIOUS.length + PIPED.length} instances`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
 });
 
 server.on('error', (e) => {
@@ -228,6 +280,6 @@ server.on('error', (e) => {
 });
 
 process.on('SIGTERM', () => {
-  console.log('Shutting down...');
+  console.log('🛑 Shutting down...');
   server.close(() => process.exit(0));
 });
