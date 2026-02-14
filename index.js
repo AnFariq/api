@@ -1,202 +1,174 @@
 const express = require('express');
+const yts = require('yt-search');
+const ytdl = require('@distube/ytdl-core');
+const fs = require('fs');
 const app = express();
+const PORT = 3000;
 
-const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0';
-
-console.log('🚀 Starting server...');
-console.log('📍 Node version:', process.version);
-console.log('📍 PORT:', PORT);
-console.log('📍 HOST:', HOST);
-
-// Basic health check FIRST (paling penting!)
-app.get('/', (req, res) => {
-  res.json({ 
-    status: 'ok',
-    message: 'Server is running!',
-    timestamp: new Date().toISOString(),
-    port: PORT
-  });
-});
-
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy',
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Middleware
-app.use(express.json());
+// Middleware logging
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
-// Import dependencies SETELAH basic routes
-let yts, axios;
+// PENTING: Buat cookies.json dari browser kamu (lihat cara di bawah)
+let cookies = [];
 try {
-  yts = require('yt-search');
-  axios = require('axios');
-  console.log('✅ Dependencies loaded successfully');
-} catch (error) {
-  console.error('❌ Failed to load dependencies:', error.message);
+  if (fs.existsSync('./cookies.json')) {
+    cookies = JSON.parse(fs.readFileSync('./cookies.json', 'utf8'));
+    console.log('[INIT] Cookies loaded:', cookies.length, 'cookies');
+  }
+} catch (err) {
+  console.warn('[INIT] No cookies file found, proceeding without cookies');
 }
 
-// Invidious instances
-const INVIDIOUS_INSTANCES = [
-  'https://inv.nadeko.net',
-  'https://vid.puffyan.us',
-  'https://invidious.privacyredirect.com'
-];
-
-let instanceIndex = 0;
-function getNextInstance() {
-  const instance = INVIDIOUS_INSTANCES[instanceIndex];
-  instanceIndex = (instanceIndex + 1) % INVIDIOUS_INSTANCES.length;
-  return instance;
-}
-
-// Search endpoint
 app.get('/search', async (req, res) => {
+  const query = req.query.q;
+  if (!query) return res.status(400).json({ error: "Query kosong" });
+  
   try {
-    if (!yts) {
-      return res.status(503).json({ error: 'Search service not available' });
-    }
-
-    const query = req.query.q;
-    if (!query) {
-      return res.status(400).json({ error: "Missing 'q' parameter" });
-    }
-
-    console.log(`Searching: ${query}`);
-    const results = await yts(query);
-    
-    const videos = results.videos.slice(0, 15).map(v => ({
+    const r = await yts(query);
+    const videos = r.videos.slice(0, 15);
+    const results = videos.map(v => ({
       id: v.videoId,
       title: v.title,
       duration: v.timestamp,
       author: v.author.name,
-      thumbnail: v.thumbnail
+      thumbnail: v.thumbnail,
     }));
-
-    res.json({ success: true, data: videos });
+    
+    res.json({ success: true, data: results });
   } catch (error) {
-    console.error('Search error:', error.message);
-    res.status(500).json({ success: false, error: error.message });
+    console.error("SEARCH ERROR:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Gagal ambil data", 
+      error: error.message 
+    });
   }
 });
 
-// Audio endpoint
 app.get('/audio', async (req, res) => {
+  const id = req.query.id;
+  
+  if (!id) {
+    return res.status(400).json({ 
+      success: false, 
+      error: "Video ID kosong" 
+    });
+  }
+
+  const url = `https://www.youtube.com/watch?v=${id}`;
+  console.log(`[AUDIO] Processing: ${id}`);
+
   try {
-    if (!axios) {
-      return res.status(503).json({ error: 'Audio service not available' });
-    }
+    req.setTimeout(45000);
+    
+    // Buat agent dengan cookies
+    const agent = ytdl.createAgent(cookies);
 
-    const id = req.query.id;
-    if (!id) {
-      return res.status(400).json({ error: "Missing 'id' parameter" });
-    }
-
-    console.log(`Getting audio for: ${id}`);
-
-    for (let i = 0; i < INVIDIOUS_INSTANCES.length; i++) {
-      const instance = getNextInstance();
-      
-      try {
-        console.log(`Trying ${instance}...`);
-        const { data } = await axios.get(
-          `${instance}/api/v1/videos/${id}`,
-          { timeout: 10000 }
-        );
-
-        const audioFormats = data.adaptiveFormats?.filter(f => 
-          f.type && f.type.includes('audio')
-        ) || [];
-
-        if (audioFormats.length === 0) {
-          throw new Error('No audio format found');
+    console.log(`[AUDIO] Fetching info with cookies...`);
+    
+    // Options untuk bypass 403
+    const info = await ytdl.getInfo(url, { 
+      agent,
+      requestOptions: {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Sec-Fetch-Mode': 'navigate',
         }
-
-        const best = audioFormats.reduce((a, b) => 
-          (b.bitrate || 0) > (a.bitrate || 0) ? b : a
-        );
-
-        console.log(`Success! Bitrate: ${best.bitrate}`);
-        return res.json({
-          success: true,
-          data: {
-            url: best.url,
-            type: best.type,
-            bitrate: best.bitrate
-          }
-        });
-      } catch (err) {
-        console.error(`${instance} failed:`, err.message);
-        continue;
       }
+    });
+
+    console.log(`[AUDIO] Info retrieved: ${info.videoDetails.title}`);
+
+    // Filter audio formats
+    const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
+    
+    if (audioFormats.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Tidak ada format audio tersedia' 
+      });
     }
 
-    res.status(500).json({ success: false, error: 'All instances failed' });
-  } catch (error) {
-    console.error('Audio error:', error.message);
-    res.status(500).json({ success: false, error: error.message });
+    // Pilih format terbaik
+    const format = audioFormats.reduce((best, current) => {
+      const bestBitrate = parseInt(best.audioBitrate) || 0;
+      const currentBitrate = parseInt(current.audioBitrate) || 0;
+      return currentBitrate > bestBitrate ? current : best;
+    });
+
+    console.log(`[AUDIO] Format: ${format.mimeType}, bitrate: ${format.audioBitrate}kbps`);
+
+    // Set response headers
+    res.setHeader('Content-Type', format.mimeType || 'audio/webm');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
+    if (format.contentLength) {
+      res.setHeader('Content-Length', format.contentLength);
+    }
+
+    // Start streaming dengan options tambahan
+    const stream = ytdl(url, { 
+      format: format,
+      agent: agent,
+      highWaterMark: 1024 * 1024 * 4, // 4MB buffer
+      requestOptions: {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }
+      }
+    });
+
+    stream.on('error', (err) => {
+      console.error('[STREAM ERROR]:', err.message);
+      if (!res.headersSent) {
+        res.status(500).json({ 
+          success: false, 
+          error: err.message 
+        });
+      } else {
+        stream.destroy();
+      }
+    });
+
+    req.on('close', () => {
+      console.log('[AUDIO] Client disconnected');
+      stream.destroy();
+    });
+
+    let bytes = 0;
+    stream.on('data', (chunk) => { bytes += chunk.length; });
+    stream.on('end', () => console.log(`[AUDIO] Done. Streamed ${(bytes/1024/1024).toFixed(2)}MB`));
+
+    stream.pipe(res);
+
+  } catch (err) {
+    console.error("[AUDIO ERROR]:", err.message);
+    
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        success: false, 
+        error: err.message,
+        hint: err.message.includes('403') ? 'YouTube blocked the request. Try updating cookies.' : undefined
+      });
+    }
   }
 });
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
-});
-
-// Error handler
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-// Start server dengan error handling
-const server = app.listen(PORT, HOST, (err) => {
-  if (err) {
-    console.error('❌ Failed to start server:', err);
-    process.exit(1);
-  }
-  console.log(`✅ Server listening on ${HOST}:${PORT}`);
-  console.log(`📍 Health check: http://localhost:${PORT}/health`);
-  console.log(`📍 Time: ${new Date().toISOString()}`);
-});
-
-// Handle server errors
-server.on('error', (error) => {
-  if (error.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} is already in use`);
-  } else {
-    console.error('❌ Server error:', error);
-  }
-  process.exit(1);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, closing server...');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    cookies: cookies.length > 0 ? 'loaded' : 'not loaded',
+    timestamp: new Date().toISOString() 
   });
 });
 
-process.on('SIGINT', () => {
-  console.log('SIGINT received, closing server...');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
-
-// Catch unhandled rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+app.listen(PORT, () => {
+  console.log(`Backend jalan di http://localhost:${PORT}`);
 });
