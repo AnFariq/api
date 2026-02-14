@@ -4,7 +4,7 @@ const axios = require('axios');
 const play = require('play-dl');
 const app = express();
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 console.log('🚀 Starting Multi-Backend Music API...');
 console.log('📍 Node:', process.version);
