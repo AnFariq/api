@@ -19,7 +19,6 @@ app.get('/search', async (req, res) => {
             duration: v.timestamp,
             author: v.author.name,
             thumbnail: v.thumbnail,
-            download_url: `/audio?id=${v.videoId}`
         }));
 
         res.json({ success: true, data: results });
