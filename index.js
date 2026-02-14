@@ -1,174 +1,231 @@
 const express = require('express');
 const yts = require('yt-search');
-const ytdl = require('@distube/ytdl-core');
-const fs = require('fs');
+const axios = require('axios');
+const play = require('play-dl');
 const app = express();
-const PORT = 3000;
 
-// Middleware logging
+const PORT = process.env.PORT || 3000;
+
+console.log('🚀 Starting Multi-Backend Music API...');
+console.log('📍 Node:', process.version);
+console.log('📍 Port:', PORT);
+
+// Middleware
+app.use(express.json());
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
-// PENTING: Buat cookies.json dari browser kamu (lihat cara di bawah)
-let cookies = [];
-try {
-  if (fs.existsSync('./cookies.json')) {
-    cookies = JSON.parse(fs.readFileSync('./cookies.json', 'utf8'));
-    console.log('[INIT] Cookies loaded:', cookies.length, 'cookies');
-  }
-} catch (err) {
-  console.warn('[INIT] No cookies file found, proceeding without cookies');
-}
+// === BACKEND 1: Invidious (updated working instances) ===
+const INVIDIOUS = [
+  'https://iv.ggtyler.dev',
+  'https://invidious.fdn.fr',
+  'https://inv.tux.pizza',
+  'https://invidious.nerdvpn.de',
+  'https://iv.melmac.space'
+];
 
+let invIdx = 0;
+const getInvidiousInstance = () => {
+  const inst = INVIDIOUS[invIdx];
+  invIdx = (invIdx + 1) % INVIDIOUS.length;
+  return inst;
+};
+
+// === BACKEND 2: Piped ===
+const PIPED = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.tokhmi.xyz',
+  'https://pipedapi.moomoo.me',
+  'https://api-piped.mha.fi'
+];
+
+let pipedIdx = 0;
+const getPipedInstance = () => {
+  const inst = PIPED[pipedIdx];
+  pipedIdx = (pipedIdx + 1) % PIPED.length;
+  return inst;
+};
+
+// === Health ===
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    message: 'Multi-Backend Music API',
+    backends: {
+      invidious: INVIDIOUS.length,
+      piped: PIPED.length,
+      playdl: 'enabled'
+    },
+    endpoints: {
+      search: '/search?q=song',
+      audio: '/audio?id=videoId'
+    }
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+// === Search ===
 app.get('/search', async (req, res) => {
-  const query = req.query.q;
-  if (!query) return res.status(400).json({ error: "Query kosong" });
-  
   try {
-    const r = await yts(query);
-    const videos = r.videos.slice(0, 15);
-    const results = videos.map(v => ({
+    const q = req.query.q;
+    if (!q) return res.status(400).json({ error: "Missing 'q'" });
+
+    console.log(`Search: "${q}"`);
+    const r = await yts(q);
+    
+    const videos = r.videos.slice(0, 15).map(v => ({
       id: v.videoId,
       title: v.title,
       duration: v.timestamp,
       author: v.author.name,
       thumbnail: v.thumbnail,
+      views: v.views
     }));
-    
-    res.json({ success: true, data: results });
-  } catch (error) {
-    console.error("SEARCH ERROR:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Gagal ambil data", 
-      error: error.message 
-    });
+
+    res.json({ success: true, data: videos });
+  } catch (e) {
+    console.error('Search error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
+// === Audio - Multi-Backend Strategy ===
 app.get('/audio', async (req, res) => {
   const id = req.query.id;
-  
-  if (!id) {
-    return res.status(400).json({ 
-      success: false, 
-      error: "Video ID kosong" 
-    });
-  }
+  if (!id) return res.status(400).json({ error: "Missing 'id'" });
 
-  const url = `https://www.youtube.com/watch?v=${id}`;
-  console.log(`[AUDIO] Processing: ${id}`);
+  console.log(`\n=== AUDIO REQUEST: ${id} ===`);
 
-  try {
-    req.setTimeout(45000);
-    
-    // Buat agent dengan cookies
-    const agent = ytdl.createAgent(cookies);
-
-    console.log(`[AUDIO] Fetching info with cookies...`);
-    
-    // Options untuk bypass 403
-    const info = await ytdl.getInfo(url, { 
-      agent,
-      requestOptions: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Sec-Fetch-Mode': 'navigate',
-        }
-      }
-    });
-
-    console.log(`[AUDIO] Info retrieved: ${info.videoDetails.title}`);
-
-    // Filter audio formats
-    const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
-    
-    if (audioFormats.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Tidak ada format audio tersedia' 
+  // STRATEGY 1: Try Invidious
+  console.log('\n[STRATEGY 1] Trying Invidious...');
+  for (let i = 0; i < INVIDIOUS.length; i++) {
+    const inst = getInvidiousInstance();
+    try {
+      console.log(`  → ${inst}`);
+      const { data } = await axios.get(`${inst}/api/v1/videos/${id}`, {
+        timeout: 8000,
+        headers: { 'User-Agent': 'Mozilla/5.0' }
       });
-    }
 
-    // Pilih format terbaik
-    const format = audioFormats.reduce((best, current) => {
-      const bestBitrate = parseInt(best.audioBitrate) || 0;
-      const currentBitrate = parseInt(current.audioBitrate) || 0;
-      return currentBitrate > bestBitrate ? current : best;
-    });
+      const audios = (data.adaptiveFormats || [])
+        .filter(f => f.type && f.type.includes('audio'));
 
-    console.log(`[AUDIO] Format: ${format.mimeType}, bitrate: ${format.audioBitrate}kbps`);
-
-    // Set response headers
-    res.setHeader('Content-Type', format.mimeType || 'audio/webm');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    
-    if (format.contentLength) {
-      res.setHeader('Content-Length', format.contentLength);
-    }
-
-    // Start streaming dengan options tambahan
-    const stream = ytdl(url, { 
-      format: format,
-      agent: agent,
-      highWaterMark: 1024 * 1024 * 4, // 4MB buffer
-      requestOptions: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        }
-      }
-    });
-
-    stream.on('error', (err) => {
-      console.error('[STREAM ERROR]:', err.message);
-      if (!res.headersSent) {
-        res.status(500).json({ 
-          success: false, 
-          error: err.message 
+      if (audios.length > 0) {
+        const best = audios.reduce((a, b) => 
+          (b.bitrate || 0) > (a.bitrate || 0) ? b : a
+        );
+        
+        console.log(`  ✅ SUCCESS via Invidious: ${best.bitrate}bps`);
+        return res.json({
+          success: true,
+          backend: 'invidious',
+          data: {
+            url: best.url,
+            type: best.type,
+            bitrate: best.bitrate,
+            title: data.title
+          }
         });
-      } else {
-        stream.destroy();
       }
-    });
-
-    req.on('close', () => {
-      console.log('[AUDIO] Client disconnected');
-      stream.destroy();
-    });
-
-    let bytes = 0;
-    stream.on('data', (chunk) => { bytes += chunk.length; });
-    stream.on('end', () => console.log(`[AUDIO] Done. Streamed ${(bytes/1024/1024).toFixed(2)}MB`));
-
-    stream.pipe(res);
-
-  } catch (err) {
-    console.error("[AUDIO ERROR]:", err.message);
-    
-    if (!res.headersSent) {
-      res.status(500).json({ 
-        success: false, 
-        error: err.message,
-        hint: err.message.includes('403') ? 'YouTube blocked the request. Try updating cookies.' : undefined
-      });
+    } catch (e) {
+      console.log(`  ✗ ${e.response?.status || e.code || e.message}`);
     }
   }
-});
 
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    cookies: cookies.length > 0 ? 'loaded' : 'not loaded',
-    timestamp: new Date().toISOString() 
+  // STRATEGY 2: Try Piped
+  console.log('\n[STRATEGY 2] Trying Piped...');
+  for (let i = 0; i < PIPED.length; i++) {
+    const inst = getPipedInstance();
+    try {
+      console.log(`  → ${inst}`);
+      const { data } = await axios.get(`${inst}/streams/${id}`, {
+        timeout: 8000,
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+
+      const audios = (data.audioStreams || [])
+        .filter(f => f.url);
+
+      if (audios.length > 0) {
+        const best = audios.reduce((a, b) => 
+          (b.bitrate || 0) > (a.bitrate || 0) ? b : a
+        );
+        
+        console.log(`  ✅ SUCCESS via Piped: ${best.bitrate}kbps`);
+        return res.json({
+          success: true,
+          backend: 'piped',
+          data: {
+            url: best.url,
+            type: best.mimeType || 'audio/mp4',
+            bitrate: best.bitrate * 1000,
+            title: data.title
+          }
+        });
+      }
+    } catch (e) {
+      console.log(`  ✗ ${e.response?.status || e.code || e.message}`);
+    }
+  }
+
+  // STRATEGY 3: Try play-dl (last resort)
+  console.log('\n[STRATEGY 3] Trying play-dl...');
+  try {
+    const info = await play.video_info(`https://www.youtube.com/watch?v=${id}`);
+    const format = info.format.filter(f => f.quality === 'high' && !f.video_codec);
+    
+    if (format.length > 0) {
+      const audio = format[0];
+      console.log(`  ✅ SUCCESS via play-dl`);
+      return res.json({
+        success: true,
+        backend: 'play-dl',
+        data: {
+          url: audio.url,
+          type: 'audio/mp4',
+          bitrate: audio.bitrate || 128000,
+          title: info.video_details.title
+        }
+      });
+    }
+  } catch (e) {
+    console.log(`  ✗ ${e.message}`);
+  }
+
+  // ALL FAILED
+  console.log('\n❌ ALL BACKENDS FAILED');
+  res.status(503).json({ 
+    success: false, 
+    error: 'All backends failed. Try again later.',
+    videoId: id
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend jalan di http://localhost:${PORT}`);
+// 404
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
+});
+
+// Start
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n✅ Server running on 0.0.0.0:${PORT}\n`);
+});
+
+server.on('error', (e) => {
+  console.error('❌ Server error:', e);
+  process.exit(1);
+});
+
+process.on('SIGTERM', () => {
+  console.log('Shutting down...');
+  server.close(() => process.exit(0));
 });
